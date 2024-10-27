@@ -38,8 +38,8 @@ COPY --from=builder ${VIRTUAL_ENV} ${VIRTUAL_ENV}
 COPY alembic.ini ./app/alembic.ini
 COPY alembic ./app/alembic
 COPY urlpinger ./app/urlpinger
-COPY config.json ./app/config.json
+# COPY config.json ./app/config.json
 
 WORKDIR /app
 
-CMD ["python", "urlpinger/main.py"]
+# CMD ["python", "urlpinger/main.py"]
