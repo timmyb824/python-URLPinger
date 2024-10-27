@@ -1,0 +1,8 @@
+
+.gitignore
+/.config/
+/.git
+/.tmp/
+/.vscode/
+Dockerfile
+Dockerfile*

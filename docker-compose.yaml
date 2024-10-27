@@ -1,0 +1,40 @@
+---
+services:
+  db:
+    image: postgres:13
+    container_name: postgres
+    environment:
+      POSTGRES_USER: urlpinger
+      POSTGRES_PASSWORD: urlpinger
+      POSTGRES_DB: urlpinger
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U urlpinger"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  urlpinger:
+    image: localhost/urlpinger:latest
+    container_name: urlpinger
+    volumes:
+      - "./config.json:/app/config.json"
+    environment:
+      - PG_DB_HOST=db
+      - PG_DB_PORT=5432
+      - PG_DB_NAME=urlpinger
+      - PG_DB_USER=urlpinger
+      - PG_DB_PASSWORD=urlpinger
+      - APP_ENV=local
+      - APPRISE_DISCORD=${APPRISE_DISCORD}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "python3 urlpinger/scripts/wait_for_db.py && python3 urlpinger/scripts/init_db.py && python urlpinger/main.py"
+    ports:
+      - "8000:8000"
+    dns:
+      - 100.100.100.100

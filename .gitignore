@@ -1,0 +1,13 @@
+
+*.dex.tmp
+.DS_Store
+/.config/
+/.tmp/
+
+.env*
+*ARCHIVE/
+.venv/
+__pycache__
+TODO.md
+.pytest_cache/
+config.json
