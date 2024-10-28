@@ -3,7 +3,7 @@ import time
 
 import psycopg2
 
-DBUSER = os.getenv("PG_DB_USER=", "urlpinger")
+DBUSER = os.getenv("PG_DB_USER", "urlpinger")
 DBPASSWORD = os.getenv("PG_DB_PASSWORD", "urlpinger")
 DBHOST = os.getenv("PG_DB_HOST", "localhost")
 DBNAME = os.getenv("PG_DB_NAME", "urlpinger")
