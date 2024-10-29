@@ -1,0 +1,26 @@
+---
+services:
+  urlpinger:
+    # build image locally from Dockerfile
+    image: localhost/urlpinger:latest
+    container_name: urlpinger
+    volumes:
+      # add `:Z` for SELinux
+      - ./config.json:/app/config.json
+    environment:
+      - PG_DB_HOST=${PG_DB_HOST}
+      - PG_DB_PORT=5432
+      - PG_DB_NAME=urlpinger
+      - PG_DB_USER={PG_DB_USER}
+      - PG_DB_PASSWORD=${PG_DB_PASSWORD}
+      - APP_ENV=prd
+      - APPRISE_DISCORD=${APPRISE_DISCORD}
+      - APPRISE_NTFY=${APPRISE_NTFY}
+    command: >
+      sh -c "python3 urlpinger/scripts/wait_for_db.py && python3 urlpinger/scripts/init_db.py && python urlpinger/main.py"
+    ports:
+      - "8000:8000"
+    restart: always
+    # this may only be necessary for some networks (e.g. tailscale)
+    dns:
+      - 100.100.100.100
