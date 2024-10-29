@@ -11,7 +11,7 @@ services:
       - PG_DB_HOST=${PG_DB_HOST}
       - PG_DB_PORT=5432
       - PG_DB_NAME=urlpinger
-      - PG_DB_USER={PG_DB_USER}
+      - PG_DB_USER=${PG_DB_USER}
       - PG_DB_PASSWORD=${PG_DB_PASSWORD}
       - APP_ENV=prd
       - APPRISE_DISCORD=${APPRISE_DISCORD}
