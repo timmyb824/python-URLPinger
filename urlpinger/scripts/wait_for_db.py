@@ -18,6 +18,7 @@ while True:
             host=DBHOST,
             port="5432",
         )
+        print("Postgres is up")
         break
     except psycopg2.OperationalError:
         print("Waiting for postgres...")
