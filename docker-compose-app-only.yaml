@@ -18,9 +18,5 @@ services:
       - APPRISE_NTFY=${APPRISE_NTFY}
     command: >
       sh -c "python3 urlpinger/scripts/wait_for_db.py && python3 urlpinger/scripts/init_db.py && python urlpinger/main.py"
-    ports:
-      - "8000:8000"
     restart: always
-    # this may only be necessary for some networks (e.g. tailscale)
-    dns:
-      - 100.100.100.100
+    network_mode: host
