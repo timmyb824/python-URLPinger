@@ -20,3 +20,6 @@ services:
       sh -c "python3 urlpinger/scripts/wait_for_db.py && python3 urlpinger/scripts/init_db.py && python urlpinger/main.py"
     restart: always
     network_mode: host
+    # for podman
+    # labels:
+    #  io.containers.autoupdate: "registry"
