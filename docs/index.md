@@ -18,4 +18,4 @@ The application exposes the following metrics for each url:
 - `url_checks_failure_total`: The total number of failed pings to the url.
 - `url_response_time`: The response time of the url in seconds.
 
-A Grafana dashboard is available to visualize the metrics and includes status, uptime, and response time graphs for each url. The dashboard is available [here]().
+A Grafana dashboard is available to visualize the metrics and includes status, uptime, and response time graphs for each url. The dashboard is available [here]() (TO BE ADDED).
