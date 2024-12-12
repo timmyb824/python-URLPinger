@@ -33,15 +33,15 @@ Here is an example of a valid `config.json` file:
 
 ```json
 {
-  "endpoints": [
+  "urls": [
     {
       "name": "Google",
-      "endpoint": "https://google.com",
+      "url": "https://google.com",
       "acceptable_status_codes": [200]
     },
     {
       "name": "Cloudflare",
-      "endpoint": "1.1.1.1",
+      "url": "1.1.1.1",
       "check_type": "ping"
     }
   ]
