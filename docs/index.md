@@ -1,4 +1,4 @@
-# url Pinger
+# URL Pinger
 
 ## Summary
 
