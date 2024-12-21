@@ -1,6 +1,8 @@
 # type: ignore
 import asyncio
+import signal
 import subprocess
+import sys
 from collections.abc import Sequence
 from typing import Optional
 
@@ -19,6 +21,24 @@ from .metrics import MetricsHandler
 logger = structlog.get_logger(__name__)
 
 metrics_handler = MetricsHandler()
+
+# Add global event to track shutdown
+shutdown_event = asyncio.Event()
+
+
+def handle_sigterm(signum, frame):
+    """Handle SIGTERM signal gracefully."""
+    logger.info("Received SIGTERM signal, initiating graceful shutdown...")
+    # Set the event to trigger shutdown
+    if asyncio.get_event_loop().is_running():
+        asyncio.get_event_loop().call_soon_threadsafe(shutdown_event.set)
+    else:
+        sys.exit(0)
+
+
+# Register signal handler
+signal.signal(signal.SIGTERM, handle_sigterm)
+signal.signal(signal.SIGINT, handle_sigterm)
 
 
 async def is_acceptable_status_code(
@@ -219,9 +239,21 @@ async def monitor_multiple_urls(
     configs: Sequence[Config], batch_size: int = 10
 ) -> None:
     """Monitor multiple urls."""
-    while True:
-        for i in range(0, len(configs), batch_size):
-            batch = configs[i : i + batch_size]
-            await asyncio.gather(*[process_url(config) for config in batch])
-            await asyncio.sleep(1)
-        await asyncio.sleep(configs[0].check_interval_seconds)
+    while not shutdown_event.is_set():
+        try:
+            for i in range(0, len(configs), batch_size):
+                if shutdown_event.is_set():
+                    break
+                batch = configs[i : i + batch_size]
+                tasks = [process_url(config) for config in batch]
+                await asyncio.gather(*tasks)
+
+            # If we're not shutting down, wait before the next iteration
+            if not shutdown_event.is_set():
+                await asyncio.sleep(60)  # Wait for 60 seconds before next check
+        except Exception as e:
+            logger.exception("Error in monitoring loop")
+            if not shutdown_event.is_set():
+                await asyncio.sleep(5)  # Wait a bit before retrying on error
+
+    logger.info("Gracefully shutting down monitoring...")
