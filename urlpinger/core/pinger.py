@@ -248,12 +248,11 @@ async def monitor_multiple_urls(
                 tasks = [process_url(config) for config in batch]
                 await asyncio.gather(*tasks)
 
-            # If we're not shutting down, wait before the next iteration
             if not shutdown_event.is_set():
-                await asyncio.sleep(60)  # Wait for 60 seconds before next check
-        except Exception as e:
+                await asyncio.sleep(9)
+        except Exception:
             logger.exception("Error in monitoring loop")
             if not shutdown_event.is_set():
-                await asyncio.sleep(5)  # Wait a bit before retrying on error
+                await asyncio.sleep(5)
 
     logger.info("Gracefully shutting down monitoring...")
