@@ -31,7 +31,7 @@ class MetricsHandler:
         self.ssl_expiry_days = Gauge(
             "endpoint_ssl_expiry_days",
             "Days until SSL certificate expires",
-            ["endpoint", "name", "type"],
+            ["domain", "type"],
         )
         self.response_time_histogram = Histogram(
             "endpoint_response_time_seconds",
@@ -66,6 +66,4 @@ class MetricsHandler:
         self, endpoint: str, name: str, type_: str, days_until_expiry: float
     ):
         """Record SSL certificate expiry information."""
-        self.ssl_expiry_days.labels(endpoint=endpoint, name=name, type=type_).set(
-            days_until_expiry
-        )
+        self.ssl_expiry_days.labels(domain=endpoint, type=type_).set(days_until_expiry)
