@@ -39,38 +39,57 @@ def extract_domain(url: str) -> str:
     return hostname  # return as is for IP addresses or simple domains
 
 
-async def should_send_ssl_notification(url: str) -> bool:
-    """Check if we should send an SSL notification for this domain.
-    Limits notifications to once per 24 hours per domain."""
+async def should_send_ssl_notification(domain: str) -> bool:
+    """
+    Check if we should send an SSL notification for a domain.
+    Only send one notification per domain per day.
+    """
     try:
-        base_domain = extract_domain(url)
-        now = datetime.now(timezone.utc)
-
         async with get_db_context() as session:
             ssl_cert = await session.execute(
-                select(SSLCertificate).where(SSLCertificate.domain == base_domain)
+                select(SSLCertificate).where(SSLCertificate.domain == domain)
             )
-            if ssl_cert := ssl_cert.scalar_one_or_none():
-                if ssl_cert.last_notification_sent is None:
-                    ssl_cert.last_notification_sent = now
-                    await session.commit()
-                    return True
+            ssl_cert = ssl_cert.scalar_one_or_none()
 
-                # Check if 24 hours have passed since last notification
-                if (now - ssl_cert.last_notification_sent) > timedelta(hours=24):
-                    ssl_cert.last_notification_sent = now
-                    await session.commit()
-                    return True
-
+            if not ssl_cert:
+                logger.warning(
+                    "ssl_cert_not_found",
+                    domain=domain,
+                    message="No SSL certificate record found when checking notification status",
+                )
                 return False
 
-            # No record found, should send notification
-            return True
+            now = datetime.now(timezone.utc)
+
+            # If we've never sent a notification or it's been more than 24 hours
+            should_notify = ssl_cert.last_notification_sent is None or (
+                now - ssl_cert.last_notification_sent
+            ) > timedelta(days=1)
+
+            if should_notify:
+                logger.info(
+                    "ssl_notification_needed",
+                    domain=domain,
+                    days_until_expiry=ssl_cert.days_until_expiry,
+                    last_notification=ssl_cert.last_notification_sent,
+                )
+            else:
+                logger.debug(
+                    "ssl_notification_skipped",
+                    domain=domain,
+                    reason="Notification already sent within 24 hours",
+                    last_notification=ssl_cert.last_notification_sent,
+                )
+
+            return should_notify
 
     except Exception as e:
-        logger.error("ssl_notification_check_error", error=str(e))
-        # If there's an error, we'll allow the notification to be sent
-        return True
+        logger.error(
+            "ssl_notification_check_error",
+            domain=domain,
+            error=str(e),
+        )
+        return False
 
 
 # async def check_ssl_certificate(url: str) -> tuple[Optional[int], Optional[str]]:
@@ -162,6 +181,13 @@ async def check_ssl_certificate(url: str) -> tuple[Optional[int], Optional[str]]
                     and ssl_cert.last_checked
                     and (now - ssl_cert.last_checked) < timedelta(hours=1)
                 ):
+                    logger.debug(
+                        "using_cached_ssl_cert",
+                        domain=base_domain,
+                        url=url,
+                        last_checked=ssl_cert.last_checked,
+                        days_until_expiry=ssl_cert.days_until_expiry,
+                    )
                     return ssl_cert.days_until_expiry, None
 
                 context = ssl.create_default_context()
@@ -183,6 +209,14 @@ async def check_ssl_certificate(url: str) -> tuple[Optional[int], Optional[str]]
                         expires = x509_cert.not_valid_after.replace(tzinfo=timezone.utc)
                         days_until_expiry = (expires - now).days
 
+                        logger.info(
+                            "ssl_cert_checked",
+                            domain=base_domain,
+                            url=url,
+                            expires=expires,
+                            days_until_expiry=days_until_expiry,
+                        )
+
                         if ssl_cert:
                             # Update existing record
                             ssl_cert.expiry_date = expires
@@ -200,8 +234,13 @@ async def check_ssl_certificate(url: str) -> tuple[Optional[int], Optional[str]]
 
                         try:
                             await session.commit()
+                            logger.debug(
+                                "ssl_cert_db_updated",
+                                domain=base_domain,
+                                url=url,
+                                operation="update" if ssl_cert else "create",
+                            )
                         except Exception as db_error:
-                            # Log DB error but don't treat it as an SSL error
                             logger.warning(
                                 "ssl_db_error",
                                 url=url,
@@ -226,18 +265,28 @@ async def check_ssl_certificate(url: str) -> tuple[Optional[int], Optional[str]]
                 raise  # Re-raise if it's not a duplicate key error
 
     except (socket.gaierror, ConnectionRefusedError) as e:
+        logger.warning(
+            "ssl_connection_error",
+            url=url,
+            domain=base_domain,
+            error=str(e),
+        )
         return None, f"Connection error: {str(e)}"
     except ssl.SSLError as e:
+        logger.error(
+            "ssl_certificate_error",
+            url=url,
+            domain=base_domain,
+            error=str(e),
+        )
         return None, f"SSL error: {str(e)}"
     except Exception as e:
-        if (
-            isinstance(e, Exception)
-            and hasattr(e, "__cause__")
-            and "duplicate key value" in str(e.__cause__)
-        ):
-            # Handle nested duplicate key errors
-            logger.warning("ssl_db_duplicate_key", url=url, domain=base_domain)
-            return None, None
+        logger.error(
+            "ssl_check_failed",
+            url=url,
+            domain=base_domain,
+            error=str(e),
+        )
         return None, f"SSL certificate check failed: {str(e)}"
 
 
@@ -463,7 +512,7 @@ async def check_single_url(
                 days_until_expiry
             )
 
-            if await should_send_ssl_notification(config.url):
+            if await should_send_ssl_notification(domain):
                 days_text = (
                     "today"
                     if days_until_expiry == 0
@@ -472,6 +521,7 @@ async def check_single_url(
                 await send_notification_async(
                     f"SSL Certificate for {domain} has expired {days_text}"
                 )
+                await update_ssl_notification_time(domain)
         elif days_until_expiry is not None:
             # Record expiry by domain for valid certificates
             domain = extract_domain(config.url)
