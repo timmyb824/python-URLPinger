@@ -241,6 +241,90 @@ async def check_ssl_certificate(url: str) -> tuple[Optional[int], Optional[str]]
         return None, f"SSL certificate check failed: {str(e)}"
 
 
+# async def check_ssl_certificate(url: str) -> tuple[Optional[int], Optional[str]]:
+#     """Check SSL certificate for a given URL."""
+#     original_hostname = urlparse(url).netloc or url  # Use this for connection
+#     base_domain = extract_domain(url)  # Use this for storage
+
+#     try:
+#         async with get_db_context() as session:
+#             try:
+#                 # Check if we already have a recent check for this domain
+#                 ssl_cert = await session.execute(
+#                     select(SSLCertificate).where(SSLCertificate.domain == base_domain)
+#                 )
+#                 ssl_cert = ssl_cert.scalar_one_or_none()
+
+#                 now = datetime.now(timezone.utc)
+#                 # If we have a recent check (within last hour), use that
+#                 if (
+#                     ssl_cert
+#                     and ssl_cert.last_checked
+#                     and (now - ssl_cert.last_checked) < timedelta(hours=1)
+#                 ):
+#                     return ssl_cert.days_until_expiry, None
+
+#                 context = ssl.create_default_context()
+#                 context.check_hostname = False
+#                 context.verify_mode = ssl.CERT_NONE
+
+#                 with socket.create_connection(
+#                     (original_hostname, 443), timeout=15
+#                 ) as sock:
+#                     with context.wrap_socket(
+#                         sock, server_hostname=original_hostname
+#                     ) as ssock:
+#                         cert = ssock.getpeercert(binary_form=True)
+#                         from cryptography import x509
+
+#                         x509_cert = x509.load_der_x509_certificate(
+#                             cert, default_backend()
+#                         )
+#                         expires = x509_cert.not_valid_after.replace(tzinfo=timezone.utc)
+#                         days_until_expiry = (expires - now).days
+
+#                         # Use raw SQL for upsert to avoid race conditions
+#                         await session.execute(
+#                             """
+#                             INSERT INTO ssl_certificates (domain, expiry_date, days_until_expiry, last_checked)
+#                             VALUES (:domain, :expiry_date, :days_until_expiry, :last_checked)
+#                             ON CONFLICT (domain)
+#                             DO UPDATE SET
+#                                 expiry_date = :expiry_date,
+#                                 days_until_expiry = :days_until_expiry,
+#                                 last_checked = :last_checked
+#                             """,
+#                             {
+#                                 "domain": base_domain,
+#                                 "expiry_date": expires,
+#                                 "days_until_expiry": days_until_expiry,
+#                                 "last_checked": now,
+#                             },
+#                         )
+#                         await session.commit()
+#                         return days_until_expiry, None
+
+#             except Exception as db_error:
+#                 logger.warning(
+#                     "ssl_db_error",
+#                     url=url,
+#                     error=str(db_error),
+#                     domain=base_domain,
+#                 )
+#                 await session.rollback()
+#                 # If we got the certificate info, return it even if DB update failed
+#                 if "days_until_expiry" in locals():
+#                     return days_until_expiry, None
+#                 raise
+
+#     except (socket.gaierror, ConnectionRefusedError) as e:
+#         return None, f"Connection error: {str(e)}"
+#     except ssl.SSLError as e:
+#         return None, f"SSL error: {str(e)}"
+#     except Exception as e:
+#         return None, f"SSL certificate check failed: {str(e)}"
+
+
 async def is_acceptable_status_code(
     code: Optional[int], acceptable_codes: list[int]
 ) -> bool:
@@ -348,87 +432,6 @@ async def process_url(
             await check_single_url(session, config, urlconfig)
 
 
-# async def check_single_url(
-#     session: AsyncSession, config: Config, urlconfig: UrlConfig
-# ) -> None:
-#     """Check a single url and use retries to determine failure status."""
-#     if urlconfig.maintenance:
-#         logger.info("maintenance_mode_enabled", name=config.name)
-#         metrics_handler.record_maintenance_mode(
-#             config.url, config.name, config.check_type
-#         )
-#         return
-
-#     # Record that we're checking this endpoint
-#     metrics_handler.record_check(config.url, config.name, config.check_type)
-
-#     # Check SSL certificate if it's an HTTPS URL
-#     if config.url.startswith("https://"):
-#         days_until_expiry, ssl_error = await check_ssl_certificate(config.url)
-#         if ssl_error:
-#             logger.error("ssl_check_error", url=config.url, error=ssl_error)
-#             metrics_handler.record_ssl_error(config.url, config.name, config.check_type)
-#             if await should_send_ssl_notification(config.url):
-#                 await send_notification_async(
-#                     f"SSL Certificate error for {extract_domain(config.url)}: {ssl_error}"
-#                 )
-#         elif days_until_expiry is not None and days_until_expiry <= 0:
-#             metrics_handler.record_ssl_expiry(
-#                 config.url, config.name, config.check_type, days_until_expiry
-#             )
-
-#     # Use the centralized ping function for all health checks
-#     status_code, error, response_time = await ping(config)
-
-#     if error or (
-#         config.check_type == "http"
-#         and not await is_acceptable_status_code(
-#             status_code, config.acceptable_status_codes
-#         )
-#     ):
-#         logger.warning(
-#             "check_failed",
-#             name=config.name,
-#             url=config.url,
-#             status_code=status_code,
-#             error=str(error),
-#         )
-
-#         # Increment consecutive failures and check threshold
-#         urlconfig.consecutive_failures += 1
-#         await session.commit()
-
-#         if urlconfig.consecutive_failures >= urlconfig.retries:
-#             metrics_handler.record_failure(config.url, config.name, config.check_type)
-
-#             # Only send notification if status is changing from UP to DOWN
-#             if urlconfig.status:
-#                 urlconfig.status = False
-#                 await session.commit()
-#                 await send_notification_async(f"{config.name} - {config.url} is DOWN!")
-#         else:
-#             logger.info(
-#                 "below_failure_threshold",
-#                 name=config.name,
-#                 url=config.url,
-#                 failures=urlconfig.consecutive_failures,
-#                 threshold=urlconfig.retries,
-#             )
-#     else:
-#         logger.info("check_successful", name=config.name, url=config.url)
-#         metrics_handler.record_success(
-#             config.url, config.name, config.check_type, response_time or 0
-#         )
-
-#         # Reset failures and update status if needed
-#         if urlconfig.consecutive_failures > 0 or not urlconfig.status:
-#             urlconfig.consecutive_failures = 0
-#             if not urlconfig.status:
-#                 urlconfig.status = True
-#                 await send_notification_async(f"{config.name} - {config.url} is UP!")
-#             await session.commit()
-
-
 async def check_single_url(
     session: AsyncSession, config: Config, urlconfig: UrlConfig
 ) -> None:
@@ -454,8 +457,9 @@ async def check_single_url(
                     f"SSL Certificate error for {extract_domain(config.url)}: {ssl_error}"
                 )
         elif days_until_expiry is not None and days_until_expiry <= 0:
-            # Only record and notify for expired certificates
-            metrics_handler.record_ssl_error(config.url, config.name, config.check_type)
+            metrics_handler.record_ssl_expiry(
+                config.url, config.name, config.check_type, days_until_expiry
+            )
             if await should_send_ssl_notification(config.url):
                 domain = extract_domain(config.url)
                 days_text = (
@@ -471,6 +475,57 @@ async def check_single_url(
             metrics_handler.record_ssl_expiry(
                 config.url, config.name, config.check_type, days_until_expiry
             )
+
+    # Use the centralized ping function for all health checks
+    status_code, error, response_time = await ping(config)
+
+    if error or (
+        config.check_type == "http"
+        and not await is_acceptable_status_code(
+            status_code, config.acceptable_status_codes
+        )
+    ):
+        logger.warning(
+            "check_failed",
+            name=config.name,
+            url=config.url,
+            status_code=status_code,
+            error=str(error),
+        )
+
+        # Increment consecutive failures and check threshold
+        urlconfig.consecutive_failures += 1
+        await session.commit()
+
+        if urlconfig.consecutive_failures >= urlconfig.retries:
+            metrics_handler.record_failure(config.url, config.name, config.check_type)
+
+            # Only send notification if status is changing from UP to DOWN
+            if urlconfig.status:
+                urlconfig.status = False
+                await session.commit()
+                await send_notification_async(f"{config.name} - {config.url} is DOWN!")
+        else:
+            logger.info(
+                "below_failure_threshold",
+                name=config.name,
+                url=config.url,
+                failures=urlconfig.consecutive_failures,
+                threshold=urlconfig.retries,
+            )
+    else:
+        logger.info("check_successful", name=config.name, url=config.url)
+        metrics_handler.record_success(
+            config.url, config.name, config.check_type, response_time or 0
+        )
+
+        # Reset failures and update status if needed
+        if urlconfig.consecutive_failures > 0 or not urlconfig.status:
+            urlconfig.consecutive_failures = 0
+            if not urlconfig.status:
+                urlconfig.status = True
+                await send_notification_async(f"{config.name} - {config.url} is UP!")
+            await session.commit()
 
 
 async def handle_failure_retries(session: AsyncSession, urlconfig: UrlConfig) -> bool:
