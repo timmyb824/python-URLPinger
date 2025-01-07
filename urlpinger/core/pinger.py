@@ -1,14 +1,15 @@
 import asyncio
 import socket
 import ssl
+import subprocess
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
+from typing import Optional
 from urllib.parse import urlparse
 
 import aiohttp
 import structlog
-from icmplib import ICMPLibError, async_ping
+from cryptography.hazmat.backends import default_backend
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,8 +32,8 @@ def extract_domain(url: str) -> str:
     # Split hostname into parts
     parts = hostname.split(".")
 
-    # For domains like xxx.local.timmybtech.com, return local.timmybtech.com
-    # For domains like healthchecks.timmybtech.com, return timmybtech.com
+    # For domains like xxx.local.example.com, return local.example.com
+    # For domains like healthchecks.example.com, return example.com
     if len(parts) > 2:
         return ".".join(parts[-3:]) if parts[-3] == "local" else ".".join(parts[-2:])
     return hostname  # return as is for IP addresses or simple domains
@@ -72,7 +73,7 @@ async def should_send_ssl_notification(url: str) -> bool:
         return True
 
 
-async def check_ssl_certificate(url: str) -> Tuple[Optional[int], Optional[str]]:
+async def check_ssl_certificate(url: str) -> tuple[Optional[int], Optional[str]]:
     """Check SSL certificate for a given URL."""
     original_hostname = urlparse(url).netloc or url  # Use this for connection
     base_domain = extract_domain(url)  # Use this for storage
@@ -101,13 +102,12 @@ async def check_ssl_certificate(url: str) -> Tuple[Optional[int], Optional[str]]
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
 
-            with socket.create_connection((original_hostname, 443), timeout=10) as sock:
+            with socket.create_connection((original_hostname, 443), timeout=15) as sock:
                 with context.wrap_socket(
                     sock, server_hostname=original_hostname
                 ) as ssock:
                     cert = ssock.getpeercert(binary_form=True)
                     from cryptography import x509
-                    from cryptography.hazmat.backends import default_backend
 
                     x509 = x509.load_der_x509_certificate(cert, default_backend())
                     expires = x509.not_valid_after.replace(tzinfo=timezone.utc)
@@ -163,7 +163,7 @@ async def http_ping(
                 async with session.get(
                     config.url,
                     allow_redirects=True,
-                    timeout=aiohttp.ClientTimeout(total=10),
+                    timeout=aiohttp.ClientTimeout(total=15),
                 ) as response:
                     response_time = asyncio.get_event_loop().time() - start_time
                     return response.status, None, response_time
@@ -183,13 +183,23 @@ async def icmp_ping(
     """Perform an ICMP ping to check the url's status."""
     try:
         start_time = asyncio.get_event_loop().time()
-        process = await async_ping(config.url, count=1, interval=1, timeout=5)
+        process = await asyncio.create_subprocess_exec(
+            "ping",
+            "-c",
+            "1",
+            "-W",
+            "5",
+            config.url,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        _, stderr = await process.communicate()
         response_time = asyncio.get_event_loop().time() - start_time
-        if process.is_alive:
+        if process.returncode == 0:
             return 0, None, response_time
 
         logger.warning("ping_error", url=config.url)
-        return None, Exception("Ping failed"), None
+        return None, Exception(stderr.decode().strip()), None
     except Exception as e:
         logger.exception("ping_error", url=config.url)
         return None, e, None
@@ -255,7 +265,7 @@ async def check_single_url(
     # Check SSL certificate if it's an HTTPS URL
     if config.url.startswith("https://"):
         days_until_expiry, ssl_error = await check_ssl_certificate(config.url)
-
+        print(days_until_expiry, ssl_error)
         if ssl_error:
             logger.error("ssl_check_error", url=config.url, error=ssl_error)
             metrics_handler.record_ssl_error(config.url, config.name, config.check_type)
@@ -264,66 +274,60 @@ async def check_single_url(
                     f"SSL Certificate error for {extract_domain(config.url)}: {ssl_error}"
                 )
         elif days_until_expiry is not None and days_until_expiry <= 0:
-            metrics_handler.record_ssl_error(config.url, config.name, config.check_type)
-            if await should_send_ssl_notification(config.url):
-                domain = extract_domain(config.url)
-                days_text = (
-                    "today"
-                    if days_until_expiry == 0
-                    else f"{abs(days_until_expiry)} days ago"
-                )
-                await send_notification_async(
-                    f"SSL Certificate for {domain} has expired {days_text}"
-                )
-
-    # Perform the actual health check
-    status_code = None
-    error = None
-    for attempt in range(config.retries + 1):
-        if config.check_type == "http":
-            status_code, error, response_time = await http_ping(config)
-        else:  # ping
-            try:
-                status_code, error, response_time = await icmp_ping(config)
-            except ICMPLibError as e:
-                if "Root privileges are required" not in str(e):
-                    raise
-
-                logger.warning("ping_requires_root_privileges", url=config.url)
-                # Fall back to HTTP ping if we don't have root privileges
-                status_code, error, response_time = await http_ping(config)
-        if await is_acceptable_status_code(status_code, config.acceptable_status_codes):
-            if urlconfig.consecutive_failures > 0:
-                logger.info(
-                    "service_recovered",
-                    name=config.name,
-                    failures=urlconfig.consecutive_failures,
-                )
-                urlconfig.consecutive_failures = 0
-                await session.commit()
-            logger.info("url_check_success", name=config.name, url=config.url)
-            metrics_handler.record_success(
-                config.url, config.name, config.check_type, response_time
+            metrics_handler.record_ssl_expiry(
+                config.url, config.name, config.check_type, days_until_expiry
             )
-            return
 
-        if attempt < config.retries:
-            logger.info("retry_attempt", name=config.name)
-            await asyncio.sleep(config.retry_interval_seconds)
+    # Use the centralized ping function for all health checks
+    status_code, error, response_time = await ping(config)
 
-    # All retries failed
-    urlconfig.consecutive_failures += 1
-    await session.commit()
+    if error or (
+        config.check_type == "http"
+        and not await is_acceptable_status_code(
+            status_code, config.acceptable_status_codes
+        )
+    ):
+        logger.warning(
+            "check_failed",
+            name=config.name,
+            url=config.url,
+            status_code=status_code,
+            error=str(error),
+        )
 
-    error_msg = str(error) if error else ""
-    logger.warning(
-        "url_check_error",
-        name=config.name,
-        url=config.url,
-        status_code=status_code,
-        error=error_msg,
-    )
-    metrics_handler.record_failure(config.url, config.name, config.check_type)
+        # Increment consecutive failures and check threshold
+        urlconfig.consecutive_failures += 1
+        await session.commit()
+
+        if urlconfig.consecutive_failures >= urlconfig.retries:
+            metrics_handler.record_failure(config.url, config.name, config.check_type)
+
+            # Only send notification if status is changing from UP to DOWN
+            if urlconfig.status:
+                urlconfig.status = False
+                await session.commit()
+                await send_notification_async(f"{config.name} - {config.url} is DOWN!")
+        else:
+            logger.info(
+                "below_failure_threshold",
+                name=config.name,
+                url=config.url,
+                failures=urlconfig.consecutive_failures,
+                threshold=urlconfig.retries,
+            )
+    else:
+        logger.info("check_successful", name=config.name, url=config.url)
+        metrics_handler.record_success(
+            config.url, config.name, config.check_type, response_time or 0
+        )
+
+        # Reset failures and update status if needed
+        if urlconfig.consecutive_failures > 0 or not urlconfig.status:
+            urlconfig.consecutive_failures = 0
+            if not urlconfig.status:
+                urlconfig.status = True
+                await send_notification_async(f"{config.name} - {config.url} is UP!")
+            await session.commit()
 
 
 async def handle_failure_retries(session: AsyncSession, urlconfig: UrlConfig) -> bool:
