@@ -450,12 +450,9 @@ async def check_single_url(
     if config.url.startswith("https://"):
         days_until_expiry, ssl_error = await check_ssl_certificate(config.url)
         if ssl_error:
-            logger.error("ssl_check_error", url=config.url, error=ssl_error)
+            # Only log the error, don't send notification for connection issues
+            logger.warning("ssl_check_error", url=config.url, error=ssl_error)
             metrics_handler.record_ssl_error(config.url, config.name, config.check_type)
-            if await should_send_ssl_notification(config.url):
-                await send_notification_async(
-                    f"SSL Certificate error for {extract_domain(config.url)}: {ssl_error}"
-                )
         elif days_until_expiry is not None and days_until_expiry <= 0:
             metrics_handler.record_ssl_expiry(
                 config.url, config.name, config.check_type, days_until_expiry
