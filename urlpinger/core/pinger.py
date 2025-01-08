@@ -21,7 +21,6 @@ from urlpinger.notifications.send_notifications import send_notification_async
 
 logger = structlog.get_logger(__name__)
 
-# Global metrics handler instance
 metrics_handler = MetricsHandler()
 
 
@@ -92,74 +91,6 @@ async def should_send_ssl_notification(domain: str) -> bool:
         return False
 
 
-# async def check_ssl_certificate(url: str) -> tuple[Optional[int], Optional[str]]:
-#     """Check SSL certificate for a given URL."""
-#     original_hostname = urlparse(url).netloc or url  # Use this for connection
-#     base_domain = extract_domain(url)  # Use this for storage
-
-#     try:
-#         async with get_db_context() as session:
-#             # Check if we already have a recent check for this domain
-#             ssl_cert = await session.execute(
-#                 select(SSLCertificate).where(SSLCertificate.domain == base_domain)
-#             )
-#             ssl_cert = ssl_cert.scalar_one_or_none()
-
-#             now = datetime.now(timezone.utc)
-#             # If we have a recent check (within last hour), use that
-#             if (
-#                 ssl_cert
-#                 and ssl_cert.last_checked
-#                 and (now - ssl_cert.last_checked) < timedelta(hours=1)
-#             ):
-#                 metrics_handler.ssl_expiry_days.labels(
-#                     domain=base_domain, type="https"
-#                 ).set(ssl_cert.days_until_expiry)
-#                 return ssl_cert.days_until_expiry, None
-
-#             context = ssl.create_default_context()
-#             context.check_hostname = False
-#             context.verify_mode = ssl.CERT_NONE
-
-#             with socket.create_connection((original_hostname, 443), timeout=15) as sock:
-#                 with context.wrap_socket(
-#                     sock, server_hostname=original_hostname
-#                 ) as ssock:
-#                     cert = ssock.getpeercert(binary_form=True)
-#                     from cryptography import x509
-
-#                     x509 = x509.load_der_x509_certificate(cert, default_backend())
-#                     expires = x509.not_valid_after.replace(tzinfo=timezone.utc)
-#                     days_until_expiry = (expires - now).days
-
-#                     # Update or create SSL certificate record
-#                     if ssl_cert:
-#                         ssl_cert.expiry_date = expires
-#                         ssl_cert.days_until_expiry = days_until_expiry
-#                         ssl_cert.last_checked = now
-#                     else:
-#                         ssl_cert = SSLCertificate(
-#                             domain=base_domain,
-#                             expiry_date=expires,
-#                             days_until_expiry=days_until_expiry,
-#                             last_checked=now,
-#                         )
-#                         session.add(ssl_cert)
-
-#                     await session.commit()
-#                     metrics_handler.ssl_expiry_days.labels(
-#                         domain=base_domain, type="https"
-#                     ).set(days_until_expiry)
-#                     return days_until_expiry, None
-
-#     except (socket.gaierror, ConnectionRefusedError) as e:
-#         return None, f"Connection error: {str(e)}"
-#     except ssl.SSLError as e:
-#         return None, f"SSL error: {str(e)}"
-#     except Exception as e:
-#         return None, f"Error checking SSL certificate: {str(e)}"
-
-
 async def check_ssl_certificate(url: str) -> tuple[Optional[int], Optional[str]]:
     """Check SSL certificate for a given URL."""
     original_hostname = urlparse(url).netloc or url  # Use this for connection
@@ -177,7 +108,7 @@ async def check_ssl_certificate(url: str) -> tuple[Optional[int], Optional[str]]
                 now = datetime.now(timezone.utc)
                 # If we have a recent check (within last hour), use that
                 if (
-                    ssl_cert
+                    ssl_cert  # type: ignore
                     and ssl_cert.last_checked
                     and (now - ssl_cert.last_checked) < timedelta(hours=1)
                 ):
@@ -288,90 +219,6 @@ async def check_ssl_certificate(url: str) -> tuple[Optional[int], Optional[str]]
             error=str(e),
         )
         return None, f"SSL certificate check failed: {str(e)}"
-
-
-# async def check_ssl_certificate(url: str) -> tuple[Optional[int], Optional[str]]:
-#     """Check SSL certificate for a given URL."""
-#     original_hostname = urlparse(url).netloc or url  # Use this for connection
-#     base_domain = extract_domain(url)  # Use this for storage
-
-#     try:
-#         async with get_db_context() as session:
-#             try:
-#                 # Check if we already have a recent check for this domain
-#                 ssl_cert = await session.execute(
-#                     select(SSLCertificate).where(SSLCertificate.domain == base_domain)
-#                 )
-#                 ssl_cert = ssl_cert.scalar_one_or_none()
-
-#                 now = datetime.now(timezone.utc)
-#                 # If we have a recent check (within last hour), use that
-#                 if (
-#                     ssl_cert
-#                     and ssl_cert.last_checked
-#                     and (now - ssl_cert.last_checked) < timedelta(hours=1)
-#                 ):
-#                     return ssl_cert.days_until_expiry, None
-
-#                 context = ssl.create_default_context()
-#                 context.check_hostname = False
-#                 context.verify_mode = ssl.CERT_NONE
-
-#                 with socket.create_connection(
-#                     (original_hostname, 443), timeout=15
-#                 ) as sock:
-#                     with context.wrap_socket(
-#                         sock, server_hostname=original_hostname
-#                     ) as ssock:
-#                         cert = ssock.getpeercert(binary_form=True)
-#                         from cryptography import x509
-
-#                         x509_cert = x509.load_der_x509_certificate(
-#                             cert, default_backend()
-#                         )
-#                         expires = x509_cert.not_valid_after.replace(tzinfo=timezone.utc)
-#                         days_until_expiry = (expires - now).days
-
-#                         # Use raw SQL for upsert to avoid race conditions
-#                         await session.execute(
-#                             """
-#                             INSERT INTO ssl_certificates (domain, expiry_date, days_until_expiry, last_checked)
-#                             VALUES (:domain, :expiry_date, :days_until_expiry, :last_checked)
-#                             ON CONFLICT (domain)
-#                             DO UPDATE SET
-#                                 expiry_date = :expiry_date,
-#                                 days_until_expiry = :days_until_expiry,
-#                                 last_checked = :last_checked
-#                             """,
-#                             {
-#                                 "domain": base_domain,
-#                                 "expiry_date": expires,
-#                                 "days_until_expiry": days_until_expiry,
-#                                 "last_checked": now,
-#                             },
-#                         )
-#                         await session.commit()
-#                         return days_until_expiry, None
-
-#             except Exception as db_error:
-#                 logger.warning(
-#                     "ssl_db_error",
-#                     url=url,
-#                     error=str(db_error),
-#                     domain=base_domain,
-#                 )
-#                 await session.rollback()
-#                 # If we got the certificate info, return it even if DB update failed
-#                 if "days_until_expiry" in locals():
-#                     return days_until_expiry, None
-#                 raise
-
-#     except (socket.gaierror, ConnectionRefusedError) as e:
-#         return None, f"Connection error: {str(e)}"
-#     except ssl.SSLError as e:
-#         return None, f"SSL error: {str(e)}"
-#     except Exception as e:
-#         return None, f"SSL certificate check failed: {str(e)}"
 
 
 async def is_acceptable_status_code(
