@@ -38,6 +38,38 @@ def extract_domain(url: str) -> str:
     return hostname  # return as is for IP addresses or simple domains
 
 
+async def update_ssl_notification_time(domain: str) -> None:
+    """
+    Update the last_notification_sent field for a domain after sending a notification.
+    """
+    try:
+        async with get_db_context() as session:
+            ssl_cert = await session.execute(
+                select(SSLCertificate).where(SSLCertificate.domain == domain)
+            )
+            ssl_cert = ssl_cert.scalar_one_or_none()
+
+            if ssl_cert:
+                ssl_cert.last_notification_sent = datetime.now(timezone.utc)
+                await session.commit()
+                logger.info(
+                    "ssl_notification_time_updated",
+                    domain=domain,
+                    last_notification=ssl_cert.last_notification_sent,
+                )
+            else:
+                logger.warning(
+                    "ssl_cert_not_found_for_notification_update",
+                    domain=domain,
+                )
+    except Exception as e:
+        logger.error(
+            "ssl_notification_update_error",
+            domain=domain,
+            error=str(e),
+        )
+
+
 async def should_send_ssl_notification(domain: str) -> bool:
     """
     Check if we should send an SSL notification for a domain.
