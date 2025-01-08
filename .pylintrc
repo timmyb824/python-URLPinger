@@ -116,6 +116,7 @@ disable=
     broad-exception-raised,
     broad-exception-caught,
     import-outside-toplevel,
+    logging-fstring-interpolation,
     ; raise-specific-error
 
 

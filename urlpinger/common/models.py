@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from sqlalchemy.sql.expression import text
@@ -34,3 +34,23 @@ class UrlConfig(Base):
         server_default=text("CURRENT_TIMESTAMP"),
         onupdate=func.now(),
     )
+
+
+class SSLCertificate(Base):
+    __tablename__ = "ssl_certificates"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        server_default=text("generated always as identity"),
+    )
+    domain = Column(String, nullable=False, unique=True)
+    expiry_date = Column(DateTime(timezone=True), nullable=False)
+    last_checked = Column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=func.now(),
+    )
+    last_notification_sent = Column(DateTime(timezone=True), nullable=True)
+    days_until_expiry = Column(Integer)
