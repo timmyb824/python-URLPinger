@@ -3,6 +3,7 @@ import logging
 import sys
 import traceback
 from collections import OrderedDict
+from datetime import datetime
 
 import structlog
 
@@ -23,13 +24,34 @@ def concise_exc_info(_logger, _log_method, event_dict):
     return event_dict
 
 
+# def custom_json_renderer(_, __, event_dict):
+#    """Custom JSON renderer to ensure 'event' key is always first"""
+#    reordered_event_dict = OrderedDict()
+#    if "msg" in event_dict:
+#        reordered_event_dict["msg"] = event_dict.pop("msg")
+#    reordered_event_dict.update(event_dict)
+#    return json.dumps(reordered_event_dict)
+
+
 def custom_json_renderer(_, __, event_dict):
-    """Custom JSON renderer to ensure 'event' key is always first"""
+    """Custom JSON renderer to ensure 'event' key is always first and handle custom types like datetime."""
+
+    def default_converter(obj):
+        """Convert non-serializable objects to JSON-compatible representations."""
+        if isinstance(obj, datetime):
+            return obj.isoformat()  # Convert datetime to ISO 8601 string
+        if isinstance(obj, Exception):
+            return str(obj)  # Convert exceptions to string
+        raise TypeError(
+            f"Object of type {obj.__class__.__name__} is not JSON serializable"
+        )
+
     reordered_event_dict = OrderedDict()
     if "msg" in event_dict:
         reordered_event_dict["msg"] = event_dict.pop("msg")
     reordered_event_dict.update(event_dict)
-    return json.dumps(reordered_event_dict)
+
+    return json.dumps(reordered_event_dict, default=default_converter)
 
 
 def configure_logging():
