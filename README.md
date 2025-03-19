@@ -26,17 +26,3 @@ URL Pinger is deployed using dex. To get started with development, follow the st
    # if you don't have poetry installed
    python urlpinger/main.py
    ```
-
-Of course if you have dex installed (which you should), you can also run the application using it:
-
-```bash
-# locally with docker
-dx run
-
-# in kubernetes
-dx run -k
-dx destroy --force # when you're done
-
-# run tests (needs more tests)
-dx test unit
-```
